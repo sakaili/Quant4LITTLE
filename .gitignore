@@ -1,0 +1,34 @@
+# Python cache / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments / IDE
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+
+# Logs / runtime outputs
+logs/
+*.log
+
+# Data artifacts (regenerated or large)
+data/daily_klines/
+data/hourly_klines/
+data/monthly_pools/
+data/daily_scans/
+data/backtest_trades.csv
+data/equity_curve.png
+data/sim_orders/
+
+# Local config / secrets
+*.env.local
+*.secret
+
+# OS metadata
+.DS_Store
+Thumbs.db
