@@ -107,6 +107,7 @@ class BinanceDataFetcher:
                 }
             exchange_config = {
                 "enableRateLimit": True,
+                "rateLimit": 1000,  # 每个请求间隔1秒
                 "apiKey": api_key,
                 "secret": api_secret,
                 "options": {
