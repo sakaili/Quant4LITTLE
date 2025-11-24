@@ -154,26 +154,12 @@ echo "────────────────────────�
 echo "  [4/7] 检查模型文件"
 echo "────────────────────────────────────────────────────────────────────────────"
 
-if [ ! -f models/rank_model.onnx ]; then
-    echo "  ⚠️  ONNX模型不存在: models/rank_model.onnx"
-
-    if [ -f models/rank_model.pt ]; then
-        echo "  ℹ️  发现PyTorch模型，正在转换为ONNX..."
-        python3 scripts/convert_to_onnx.py
-
-        if [ -f models/rank_model.onnx ]; then
-            echo "  ✓ ONNX模型转换成功"
-        else
-            echo "  ❌ ONNX模型转换失败"
-            exit 1
-        fi
-    else
-        echo "  ❌ 未找到任何模型文件"
-        echo "  请先训练模型或从其他地方复制模型文件到 models/ 目录"
-        exit 1
-    fi
+if [ ! -f models/rank_model.pt ]; then
+    echo "  ❌ PyTorch模型不存在: models/rank_model.pt"
+    echo "  请先训练模型或从其他地方复制模型文件到 models/ 目录"
+    exit 1
 else
-    echo "  ✓ ONNX模型存在: models/rank_model.onnx"
+    echo "  ✓ PyTorch模型存在: models/rank_model.pt"
 fi
 
 if [ ! -f models/rank_model_meta.json ]; then
