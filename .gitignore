@@ -32,3 +32,25 @@ data/sim_orders/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Paper trading signals (可选：如果信号文件太多可以忽略)
+data/paper_trading/
+
+# 备份文件
+*.bak
+*.backup
+backup_*
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 大型训练日志（保留在服务器，不上传到Git）
+training.log
+training_final.log
+auto_train.log
+regenerate_scans.log
+data_update.log
+
+# 注意: models/ 目录需要保留！模型文件需要上传到Git

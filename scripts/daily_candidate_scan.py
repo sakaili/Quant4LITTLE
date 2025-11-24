@@ -6,7 +6,7 @@ Module 2: Daily scanner that identifies the weakest Binance USDT perpetuals.
 1. 过滤主流币：直接剔除 BTC/ETH/BNB/SOL/XRP 等大市值资产。
 2. 流动性 + “伪市值”过滤：先找出 24h 成交额最低的 N 个，再与
    24h ticker 里提供的市值倒数 N 个求交集 -> “空气币池”。
-3. 入场信号：候选池中，最新日线满足 EMA20 < EMA30 的标的。
+3. 入场信号：候选池中，最新日线满足 EMA10 < EMA20 < EMA30 的标的。
 4. 风险控制：资金费率不低于 -1%，且 ATR14 没有在最近 3 天暴涨
    （今天 ATR > 3 * 前 3 天均值）。
 
@@ -30,9 +30,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pandas as pd
-import pandas_ta as ta
 
 from scripts.data_fetcher import BinanceDataFetcher, SymbolMetadata
+from scripts.indicator_utils import compute_kdj
 
 logger = logging.getLogger("daily_scan")
 
@@ -73,6 +73,7 @@ class Candidate:
     quote_volume: float
     market_cap: Optional[float]
     funding_rate: Optional[float]
+    ema10: float
     ema20: float
     ema30: float
     atr14: float
@@ -158,11 +159,12 @@ def pick_air_coin_pool(
 
 def ema_cross_filter(history: pd.DataFrame) -> bool:
     last = history.iloc[-1]
+    ema10 = last["ema10"]
     ema20 = last["ema20"]
     ema30 = last["ema30"]
-    if pd.isna(ema20) or pd.isna(ema30):
+    if pd.isna(ema10) or pd.isna(ema20) or pd.isna(ema30):
         return False
-    return ema20 < ema30
+    return ema10 < ema20 < ema30
 
 
 def atr_spike_filter(history: pd.DataFrame) -> bool:
@@ -195,13 +197,22 @@ def latest_kdj_j_above_threshold(
     *,
     threshold: float = 90.0,
     hours_lookback: int = 72,
+    as_of_date: Optional[date] = None,
 ) -> bool:
     """
     拉取近若干小时（默认 72h）的 1h K 线，计算 KDJ，并判断最新 J 是否高于阈值。
     使用 pandas-ta 的 stoch 生成 K/D，再计算 J = 3K - 2D。
+
+    如果指定 as_of_date，则只使用该日期及之前的数据（避免数据泄露）。
     """
     try:
-        end = datetime.now(timezone.utc)
+        if as_of_date is not None:
+            # 历史模式：截止到 as_of_date 结束
+            end = datetime.combine(as_of_date, datetime.max.time(), tzinfo=timezone.utc)
+        else:
+            # 实时模式：使用当前时间
+            end = datetime.now(timezone.utc)
+
         start = end - timedelta(hours=hours_lookback)
         frame = fetcher.fetch_klines(
             symbol, start=start, end=end, timeframe="1h", limit=500
@@ -211,23 +222,18 @@ def latest_kdj_j_above_threshold(
         return False
     if frame.empty:
         return False
-    stoch = ta.stoch(
-        high=frame["high"],
-        low=frame["low"],
-        close=frame["close"],
-        k=9,
-        d=3,
-        smooth_k=3,
-    )
-    if stoch is None or stoch.empty:
+
+    # 如果指定了 as_of_date，再次过滤确保不使用未来数据
+    if as_of_date is not None:
+        frame = frame[frame["timestamp"].dt.date <= as_of_date]
+        if frame.empty:
+            return False
+
+    _, _, j = compute_kdj(frame[["high", "low", "close"]])
+    cleaned = j.dropna()
+    if cleaned.empty:
         return False
-    k = stoch.iloc[:, 0]
-    d = stoch.iloc[:, 1]
-    j = 3 * k - 2 * d
-    latest_j = j.dropna().iloc[-1] if not j.dropna().empty else None
-    if latest_j is None:
-        return False
-    return latest_j > threshold
+    return cleaned.iloc[-1] > threshold
 
 
 def build_candidates(
@@ -237,16 +243,47 @@ def build_candidates(
     *,
     timeframe: str,
     funding_cooldown: float,
+    as_of_date: date,
 ) -> List[Candidate]:
-    histories = fetcher.fetch_bulk_history(symbols, timeframe=timeframe)
+    """
+    构建候选列表，使用截止到 as_of_date 的历史数据。
+
+    重要：为避免数据泄露，只使用 as_of_date 及之前的数据。
+    """
+    # 获取历史数据，截止到 as_of_date
+    end_dt = datetime.combine(as_of_date, datetime.max.time(), tzinfo=timezone.utc)
+    start_dt = end_dt - timedelta(days=200)  # 足够计算EMA30和ATR14
+
+    histories = fetcher.fetch_bulk_history(
+        symbols,
+        start=start_dt,
+        end=end_dt,
+        timeframe=timeframe
+    )
     rows: List[Candidate] = []
+
     for symbol, history in histories.items():
-        if history.empty or not ema_cross_filter(history):
+        if history.empty:
+            continue
+
+        # 只保留 <= as_of_date 的数据
+        history = history[history["timestamp"].dt.date <= as_of_date].copy()
+        if history.empty:
+            continue
+
+        # 检查 EMA 条件
+        if not ema_cross_filter(history):
             continue
         if not atr_spike_filter(history):
             continue
-        if not latest_kdj_j_above_threshold(fetcher, symbol, threshold=90.0):
+
+        # 检查小时级 KDJ（使用截止到 as_of_date 的数据）
+        if not latest_kdj_j_above_threshold(
+            fetcher, symbol, threshold=90.0, as_of_date=as_of_date
+        ):
             continue
+
+        # 获取资金费率（注意：这里获取的是当前的费率，历史费率难以获取）
         funding = fetch_funding_rate(fetcher, symbol)
         if funding is not None and funding < FUNDING_RATE_FLOOR:
             logger.debug("%s rejected: funding %.4f", symbol, funding)
@@ -255,14 +292,19 @@ def build_candidates(
 
         last = history.iloc[-1]
         meta = meta_map[symbol]
+
+        # 使用 as_of_date 作为信号时间戳，避免使用未来数据
+        signal_timestamp = pd.Timestamp(as_of_date, tz=timezone.utc)
+
         rows.append(
             Candidate(
                 symbol=symbol,
                 base=meta.base,
-                timestamp=pd.Timestamp(last["timestamp"]).tz_convert("UTC"),
-                quote_volume=float("nan"),
-                market_cap=None,  # will fill later
+                timestamp=signal_timestamp,  # 使用信号日期而非K线时间戳
+                quote_volume=float("nan"),  # 将在 run_scan 中回填
+                market_cap=None,
                 funding_rate=funding,
+                ema10=float(last["ema10"]),
                 ema20=float(last["ema20"]),
                 ema30=float(last["ema30"]),
                 atr14=float(last["atr14"]),
@@ -317,6 +359,7 @@ def run_scan(
         meta_map,
         timeframe=timeframe,
         funding_cooldown=funding_cooldown,
+        as_of_date=as_of,
     )
     if not candidates:
         logger.warning("今天没有符合策略条件的标的。")

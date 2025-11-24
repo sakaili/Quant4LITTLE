@@ -287,6 +287,7 @@ class BinanceDataFetcher:
     ) -> pd.DataFrame:
         """Append EMA/ATR (+ optional RSI & rolling 90d return) columns."""
         enriched = frame.copy()
+        enriched["ema10"] = ta.ema(enriched["close"], length=10)
         enriched["ema20"] = ta.ema(enriched["close"], length=20)
         enriched["ema30"] = ta.ema(enriched["close"], length=30)
         atr_series = ta.atr(

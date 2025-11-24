@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat:*)",
+      "Bash(python scripts/daily_candidate_scan.py:*)",
+      "Bash(python:*)",
+      "Bash(tee:*)",
+      "Bash(python3:*)",
+      "Bash(iconv:*)",
+      "Bash(for f in data/daily_scans/candidates_202501{01,02,03,26,27}.csv)",
+      "Bash(done)",
+      "Bash(timeout 180 python:*)",
+      "Bash(timeout 120 python:*)",
+      "Bash(timeout 600 python:*)",
+      "Bash(timeout 300 python:*)",
+      "Bash(chmod +x f:/2025/Quant4Little/deploy/*.sh)",
+      "Bash(pip install:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

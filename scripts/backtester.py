@@ -5,7 +5,7 @@ Module 3: Event-driven backtester for the Binance “air coin” short strategy.
 Key features:
     * Daily scan of the lowest-liquidity perpetuals (static pool derived from
       the current 24h ticker snapshot).
-    * Entries occur on the next session's open after EMA20 < EMA30 signal.
+    * Entries occur on the next session's open after EMA10 < EMA20 < EMA30 signal.
     * Risk controls: 30% take-profit, ATR-based stop (entry + 3*ATR14),
       and EMA20 technical stop (close > EMA20 -> exit next open).
     * Position sizing: net worth * per_trade_pct * leverage (e.g. 1% * 2x).
@@ -217,6 +217,7 @@ class ShortAirCoinBacktester:
             if frame.empty:
                 continue
             frame = frame.copy()
+            frame["ema10"] = ta.ema(frame["close"], length=10)
             frame["ema20"] = ta.ema(frame["close"], length=20)
             frame["ema30"] = ta.ema(frame["close"], length=30)
             mask = (frame["timestamp"].dt.date >= self.start) & (
@@ -398,12 +399,13 @@ class ShortAirCoinBacktester:
             funding = self.funding_rates.get(symbol)
             if funding is not None and funding < FUNDING_RATE_FLOOR:
                 continue
+            ema10 = float(row.get("ema10", float("nan")))
             ema20 = float(row.get("ema20", float("nan")))
             ema30 = float(row.get("ema30", float("nan")))
             atr14 = float(row["atr14"])
-            if any(math.isnan(val) for val in (ema20, ema30, atr14)):
+            if any(math.isnan(val) for val in (ema10, ema20, ema30, atr14)):
                 continue
-            if ema20 >= ema30:
+            if not (ema10 < ema20 < ema30):
                 continue
             if not self._hourly_kdj_j_ok(symbol, current_date, threshold=80.0):
                 continue

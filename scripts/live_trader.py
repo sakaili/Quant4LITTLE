@@ -4,7 +4,7 @@ Prototype live-trading helper for the short strategy.
 
 Features (maker-only intent):
 - 每月首日刷新成交额/市值倒数 100 的池子并落盘：data/monthly_pools/pool_YYYY-MM-DD.csv
-- 实时拉取日线 / 小时线，筛选入场信号：日线 EMA20 < EMA30 + ATR 正常，且最近一日的 1h 任意 KDJ J > 90
+- 实时拉取日线 / 小时线，筛选入场信号：日线 EMA10 < EMA20 < EMA30 + ATR 正常，且最近一日的 1h 任意 KDJ J > 90
 - 仅生成候选与建议下单价格（买一价或买五价），下单使用 postOnly 保证 maker
 
 用法举例（仅生成信号，不下单）:
@@ -33,6 +33,8 @@ import pandas_ta as ta
 
 from scripts.data_fetcher import BinanceDataFetcher, SymbolMetadata
 from scripts.daily_candidate_scan import filter_out_majors, pick_air_coin_pool
+from scripts.modeling.predictor import RankerPredictor, prepare_candidate_input
+from scripts.indicator_utils import compute_kdj
 
 logger = logging.getLogger("live_trader")
 
@@ -55,6 +57,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proxy-http", type=str, default=None, help="HTTP 代理（如 http://127.0.0.1:7890）")
     parser.add_argument("--proxy-https", type=str, default=None, help="HTTPS 代理")
     parser.add_argument("--use-testnet", action="store_true", help="使用币安期货测试网")
+    parser.add_argument("--max-positions", type=int, default=20, help="最大并发新仓位数量（按模型排序截断）")
+    parser.add_argument("--ranker-model", type=Path, default=Path("models/rank_model.pt"), help="深度学习排序模型路径")
+    parser.add_argument("--ranker-meta", type=Path, default=Path("models/rank_model_meta.json"), help="排序模型元数据")
+    parser.add_argument("--ranker-device", type=str, default="cpu", help="模型推理设备（cpu/cuda）")
+    parser.add_argument("--disable-ranker", action="store_true", help="跳过深度学习排序阶段")
     return parser.parse_args()
 
 
@@ -112,9 +119,13 @@ def fetch_indicator_frames(
     daily_lookback_days: int = 200,
     hourly_lookback_hours: int = 168,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, pd.DataFrame]]:
-    end_dt = datetime.combine(as_of, datetime.min.time(), tzinfo=timezone.utc)
-    start_daily = end_dt - timedelta(days=daily_lookback_days)
-    start_hourly = end_dt - timedelta(hours=hourly_lookback_hours)
+    day_start = datetime.combine(as_of, datetime.min.time(), tzinfo=timezone.utc)
+    prev_day_start = day_start - timedelta(days=1)
+    daily_end_dt = prev_day_start + timedelta(days=1)
+    now_utc = datetime.now(timezone.utc)
+    hourly_end_dt = min(now_utc, day_start + timedelta(days=1))
+    start_daily = daily_end_dt - timedelta(days=daily_lookback_days)
+    start_hourly = hourly_end_dt - timedelta(hours=hourly_lookback_hours)
     daily = {}
     hourly = {}
     for sym in symbols:
@@ -122,17 +133,18 @@ def fetch_indicator_frames(
             d = fetcher.fetch_symbol_history_with_indicators(
                 sym,
                 start=start_daily,
-                end=end_dt,
+                end=daily_end_dt,
                 timeframe="1d",
                 indicators_kwargs={"add_rsi": False, "add_return_90d": False},
             )
+            d["ema10_alt"] = ta.ema(d["close"], length=10)
             d["ema20_alt"] = ta.ema(d["close"], length=20)
             d["ema30_alt"] = ta.ema(d["close"], length=30)
             daily[sym] = d
         except Exception as exc:
             logger.warning("Daily fetch failed %s: %s", sym, exc)
         try:
-            h = fetcher.fetch_klines(sym, start=start_hourly, end=end_dt, timeframe="1h")
+            h = fetcher.fetch_klines(sym, start=start_hourly, end=hourly_end_dt, timeframe="1h")
             hourly[sym] = h
         except Exception as exc:
             logger.warning("Hourly fetch failed %s: %s", sym, exc)
@@ -150,13 +162,10 @@ def fetch_funding_rate_safe(exchange: ccxt.Exchange, symbol: str) -> Optional[fl
 
 
 def hourly_kdj_levels(frame: pd.DataFrame, levels: Iterable[float]) -> Tuple[Dict[float, bool], Optional[float]]:
-    stoch = ta.stoch(high=frame["high"], low=frame["low"], close=frame["close"], k=9, d=3, smooth_k=3)
     results = {lvl: False for lvl in levels}
-    if stoch is None or stoch.empty:
+    if frame.empty:
         return results, None
-    k = stoch.iloc[:, 0]
-    d = stoch.iloc[:, 1]
-    j = 3 * k - 2 * d
+    _, _, j = compute_kdj(frame[["high", "low", "close"]])
     cleaned = j.dropna()
     if cleaned.empty:
         return results, None
@@ -191,6 +200,51 @@ def get_market_price(exchange: ccxt.Exchange, symbol: str) -> Optional[float]:
     except Exception as exc:  # pragma: no cover - network
         logger.warning("fetch_ticker failed for %s: %s", symbol, exc)
         return None
+
+
+def apply_ranking(
+    signals: List[Tuple[str, Dict[float, bool]]],
+    *,
+    ranker: Optional[RankerPredictor],
+    daily_frames: Dict[str, pd.DataFrame],
+    hourly_frames: Dict[str, pd.DataFrame],
+    symbol_meta: Dict[str, Dict[str, float]],
+    signal_date: date,
+    entry_date: date,
+    max_positions: int,
+) -> Tuple[List[Tuple[str, Dict[float, bool]]], Dict[str, Dict[str, object]]]:
+    if ranker is None or not signals:
+        return signals, {}
+    entry_cutoff = datetime.combine(entry_date, datetime.min.time(), tzinfo=timezone.utc)
+    candidates = []
+    for sym, _ in signals:
+        dframe = daily_frames.get(sym)
+        hframe = hourly_frames.get(sym)
+        if dframe is None or hframe is None or dframe.empty or hframe.empty:
+            continue
+        meta = symbol_meta.get(sym, {})
+        candidate = prepare_candidate_input(
+            symbol=sym,
+            signal_date=signal_date,
+            entry_cutoff=entry_cutoff,
+            daily_history=dframe,
+            hourly_history=hframe,
+            funding_rate=float(meta.get("funding_rate") or 0.0),
+            quote_volume=float(meta.get("quote_volume") or 0.0),
+            market_cap=float(meta.get("market_cap") or 0.0),
+            seq_len=ranker.seq_len,
+        )
+        if candidate:
+            candidates.append(candidate)
+    if not candidates:
+        return signals, {}
+    ranked = ranker.score(candidates)
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    top_symbols = [entry["symbol"] for entry in ranked[:max_positions]]
+    ranking_map = {entry["symbol"]: entry for entry in ranked}
+    filtered = [item for item in signals if item[0] in top_symbols]
+    filtered.sort(key=lambda item: ranking_map[item[0]]["score"], reverse=True)
+    return filtered, ranking_map
 
 
 def place_market_short(
@@ -277,8 +331,21 @@ def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     as_of = date.fromisoformat(args.as_of)
+    daily_signal_date = as_of - timedelta(days=1)
     fetcher = BinanceDataFetcher(use_testnet=args.use_testnet)
     apply_proxies(fetcher.exchange, args.proxy_http, args.proxy_https)
+    ranker: Optional[RankerPredictor] = None
+    if not args.disable_ranker:
+        model_path = Path(args.ranker_model)
+        meta_path = Path(args.ranker_meta)
+        if model_path.exists() and meta_path.exists():
+            try:
+                ranker = RankerPredictor(model_path, meta_path, device=args.ranker_device)
+                logger.info("Loaded ranking model from %s", model_path)
+            except Exception as exc:
+                logger.warning("Failed to load ranking model: %s", exc)
+        else:
+            logger.info("Ranking model not found at %s or %s; skipping ranking stage.", model_path, meta_path)
 
     if args.refresh_pool:
         pool = refresh_monthly_pool(fetcher, bottom_n=args.bottom_n, as_of=as_of)
@@ -300,6 +367,7 @@ def main() -> None:
         bottom_df["funding_rate"].isna() | (bottom_df["funding_rate"] >= 0)
     ].reset_index(drop=True)
     print_step("Step 1 - 成交额最低的 100 名（去负费率）", filtered_bottom)
+    symbol_meta = filtered_bottom.set_index("symbol").to_dict("index")
 
     symbols = filtered_bottom["symbol"].tolist()
     daily_frames, hourly_frames = fetch_indicator_frames(fetcher, symbols, as_of=as_of)
@@ -313,19 +381,21 @@ def main() -> None:
         dframe = daily_frames.get(sym)
         if dframe is None or dframe.empty:
             continue
-        matches = dframe[dframe["timestamp"].dt.date == as_of]
+        matches = dframe[dframe["timestamp"].dt.date == daily_signal_date]
         if matches.empty:
             continue
         row = matches.iloc[-1]
+        ema10 = row.get("ema10_alt")
         ema20 = row.get("ema20_alt")
         ema30 = row.get("ema30_alt")
-        if any(pd.isna(x) for x in (ema20, ema30)):
+        if any(pd.isna(x) for x in (ema10, ema20, ema30)):
             continue
-        if ema20 >= ema30:
+        if not (ema10 < ema20 < ema30):
             continue
         ema_pass_rows.append(
             {
                 "symbol": sym,
+                "ema10": float(ema10),
                 "ema20": float(ema20),
                 "ema30": float(ema30),
             }
@@ -347,16 +417,35 @@ def main() -> None:
                 **{f"J>{int(lvl)}": ("Y" if kdj_map[lvl] else "N") for lvl in levels},
             }
         )
-        if kdj_map[80.0]:
+        if kdj_map[90.0]:
             signals.append((sym, kdj_map))
 
-    print_step("Step 2 - EMA20 < EMA30", pd.DataFrame(ema_pass_rows))
+    print_step("Step 2 - EMA10 < EMA20 < EMA30", pd.DataFrame(ema_pass_rows))
     kdj_df = pd.DataFrame(kdj_rows)
     if not kdj_df.empty and "latest_J" in kdj_df.columns:
         kdj_df.sort_values(by="latest_J", ascending=False, inplace=True)
     print_step("Step 3 - 小时 KDJ 阈值（按最新 J 排序）", kdj_df)
 
-    logger.info("Signals on %s (J>80 + EMA条件): %s", as_of, len(signals))
+    signals, ranking_scores = apply_ranking(
+        signals,
+        ranker=ranker,
+        daily_frames=daily_frames,
+        hourly_frames=hourly_frames,
+        symbol_meta=symbol_meta,
+        signal_date=daily_signal_date,
+        entry_date=as_of,
+        max_positions=args.max_positions,
+    )
+    if ranking_scores:
+        preview = ", ".join(
+            f"{sym}:{ranking_scores[sym]['score']:.3f}"
+            for sym, _ in signals[: min(len(signals), 5)]
+            if sym in ranking_scores
+        )
+        if preview:
+            logger.info("Ranker top picks: %s", preview)
+
+    logger.info("Signals on %s (J>90 + EMA条件): %s", as_of, len(signals))
     if not signals:
         return
     exchange = fetcher.exchange
@@ -390,9 +479,13 @@ def main() -> None:
 
         tp_price = price * (1 - 0.30)
         sl_price = price * 2.5  # 150% 不利止损
+        score_info = ""
+        rank_entry = ranking_scores.get(sym)
+        if rank_entry:
+            score_info = f" score={rank_entry['score']:.3f}"
         msg = (
             f"{sym} price@{'bid5' if args.use_bid5 else 'bid1'}={price} "
-            f"[{level_info}] notional={notional:.4f} tp={tp_price:.6f} sl={sl_price:.6f}"
+            f"[{level_info}] notional={notional:.4f} tp={tp_price:.6f} sl={sl_price:.6f}{score_info}"
         )
         if args.paper:
             logger.info("[PAPER] %s qty=%.6f", msg, notional / price)
