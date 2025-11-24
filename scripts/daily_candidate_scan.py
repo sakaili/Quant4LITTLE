@@ -268,11 +268,12 @@ def build_candidates(
         if not atr_spike_filter(history):
             continue
 
-        # 检查小时级 KDJ（使用截止到 as_of_date 的数据）
-        if not latest_kdj_j_above_threshold(
-            fetcher, symbol, threshold=80.0, as_of_date=as_of_date
-        ):
-            continue
+        # 候选池不再使用KDJ过滤，由小时级信号检测负责
+        # 注释原因：扩大候选池规模，让更多标的进入观察范围
+        # if not latest_kdj_j_above_threshold(
+        #     fetcher, symbol, threshold=80.0, as_of_date=as_of_date
+        # ):
+        #     continue
 
         # 获取资金费率（注意：这里获取的是当前的费率，历史费率难以获取）
         funding = fetch_funding_rate(fetcher, symbol)
