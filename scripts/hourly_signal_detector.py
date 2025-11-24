@@ -81,7 +81,9 @@ def detect_signals(
 
         for _, row in candidates.iterrows():
             symbol = row["symbol"]
-            hourly_file = hourly_dir / f"{symbol}_1h.csv"
+            # 清理文件名：移除/和:字符
+            clean_symbol = symbol.replace("/", "").replace(":", "")
+            hourly_file = hourly_dir / f"{clean_symbol}_1h.csv"
             if not hourly_file.exists():
                 missing_symbols.append(symbol)
 
@@ -99,7 +101,9 @@ def detect_signals(
                     print(f"    [{i+1}/{len(missing_symbols)}] 下载 {symbol} 小时线数据...", end="")
                     df = fetcher.fetch_klines(symbol, start=start, end=end, timeframe="1h")
                     if not df.empty:
-                        hourly_file = hourly_dir / f"{symbol}_1h.csv"
+                        # 清理文件名：移除/和:字符
+                        clean_symbol = symbol.replace("/", "").replace(":", "")
+                        hourly_file = hourly_dir / f"{clean_symbol}_1h.csv"
                         df.to_csv(hourly_file, index=False)
                         print(f" ✓ ({len(df)}根K线)")
                     else:
@@ -129,7 +133,9 @@ def detect_signals(
         symbol = row["symbol"]
 
         try:
-            hourly_file = hourly_dir / f"{symbol}_1h.csv"
+            # 清理文件名：移除/和:字符
+            clean_symbol = symbol.replace("/", "").replace(":", "")
+            hourly_file = hourly_dir / f"{clean_symbol}_1h.csv"
             if not hourly_file.exists():
                 stats["no_hourly_file"] += 1
                 continue
