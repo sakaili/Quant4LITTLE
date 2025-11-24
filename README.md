@@ -34,7 +34,7 @@
 ### 系统工作流
 
 ```
-每天09:00 → 筛选候选池(100个币) → 候选列表CSV
+每天09:00 → 筛选候选池(300个币) → 候选列表CSV
 每小时整点 → 检测信号(KDJ+EMA+ATR) → Transformer模型排序 → 并行下单(Top-10)
 持仓管理 → 止盈止损监控 → 触发止盈/止损平仓
 ```
@@ -44,9 +44,9 @@
 ## 核心特性
 
 ### 1. 智能候选筛选
-- 基于流动性和市值倒数筛选低流动性标的
+- 基于成交额倒数筛选低流动性标的
 - 成交量过滤(>500万USDT)
-- 自动生成每日候选池(100个标的)
+- 自动生成每日候选池(300个标的)
 
 ### 2. 小时级信号检测
 - 实时监控候选池
@@ -128,7 +128,7 @@ python scripts/backtester.py \
   --start 2025-01-01 \
   --end 2025-11-01 \
   --max-positions 30 \
-  --bottom-n 100
+  --bottom-n 300
 ```
 
 输出包含:
@@ -140,7 +140,7 @@ python scripts/backtester.py \
 #### 2. 生成候选池
 
 ```bash
-python scripts/daily_candidate_scan.py --bottom-n 100
+python scripts/daily_candidate_scan.py --bottom-n 300
 ```
 
 生成文件: `data/daily_scans/candidates_YYYYMMDD.csv`
@@ -314,7 +314,7 @@ ls -lh data/hourly_signals/
 
 | 时间 | 任务 | 说明 |
 |------|------|------|
-| 09:00 | 筛选候选池 | 扫描全市场，选出100个候选币 |
+| 09:00 | 筛选候选池 | 扫描全市场，选出300个候选币 |
 | 10:00 | 检测信号+交易 | 使用Transformer模型排序，执行Top-10 |
 | 11:00 | 检测信号+交易 | 同上 |
 | ... | ... | 每小时重复 |
@@ -329,9 +329,7 @@ ls -lh data/hourly_signals/
 每天09:00执行，筛选条件:
 
 1. **流动性过滤**:
-   - 按24小时成交额倒数排序
-   - 按市值倒数排序
-   - 取两者交集作为"空气币池"
+   - 按24小时成交额倒数排序，选取底部300个标的作为"空气币池"
 
 2. **技术指标过滤**:
    - EMA排列: EMA10 < EMA20 < EMA30 (底部形态)
@@ -541,7 +539,7 @@ LightweightRanker会自动检测并优先使用ONNX模型。
 1. **流动性过滤**: 成交量>500万USDT
 2. **波动率过滤**: ATR≥2%
 3. **排除主流币**: 避免与大盘高度相关
-4. **候选池限制**: 每天只筛选100个标的
+4. **候选池限制**: 每天只筛选300个标的
 
 ---
 
@@ -747,7 +745,7 @@ print(f"Top-10平均期望值: {signals.head(10)['expected_value'].mean():.4f}")
 **Q: 模型推理速度太慢怎么办?**
 
 1. 转换为ONNX格式(3-5x加速)
-2. 减少候选池大小(从100降到50)
+2. 减少候选池大小(从300降到150)
 3. 增加服务器CPU核心数
 4. 使用更小的模型架构
 
@@ -758,7 +756,7 @@ print(f"Top-10平均期望值: {signals.head(10)['expected_value'].mean():.4f}")
 1. 检查网络连接和代理配置
 2. 检查API密钥是否有效
 3. 查看错误日志: `tail -50 logs/cron_candidates.log`
-4. 手动重试: `python3 scripts/daily_candidate_scan.py --bottom-n 100`
+4. 手动重试: `python3 scripts/daily_candidate_scan.py --bottom-n 300`
 
 **Q: 历史数据在哪里?**
 

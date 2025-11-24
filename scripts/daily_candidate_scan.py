@@ -4,8 +4,7 @@ Module 2: Daily scanner that identifies the weakest Binance USDT perpetuals.
 
 筛选步骤（必须按顺序执行）：
 1. 过滤主流币：直接剔除 BTC/ETH/BNB/SOL/XRP 等大市值资产。
-2. 流动性 + “伪市值”过滤：先找出 24h 成交额最低的 N 个，再与
-   24h ticker 里提供的市值倒数 N 个求交集 -> “空气币池”。
+2. 流动性过滤：按24小时成交额倒数排序，选取底部300个标的作为"空气币池"。
 3. 入场信号：候选池中，最新日线满足 EMA10 < EMA20 < EMA30 的标的。
 4. 风险控制：资金费率不低于 -1%，且 ATR14 没有在最近 3 天暴涨
    （今天 ATR > 3 * 前 3 天均值）。
@@ -61,7 +60,7 @@ MAJOR_BASES = {
 FUNDING_RATE_FLOOR = -0.01  # -1%
 ATR_SPIKE_LOOKBACK = 3
 ATR_SPIKE_MULTIPLIER = 3.0
-BOTTOM_N = 100
+BOTTOM_N = 300
 OUTPUT_DIR = Path("data/daily_scans")
 
 
@@ -135,24 +134,16 @@ def pick_air_coin_pool(
     *,
     bottom_n: int,
 ) -> Set[str]:
+    """
+    按照24小时成交额倒数排序，选取底部N个标的作为"空气币池"。
+    """
     liquidity_bottom = (
         tickers.sort_values("quote_volume", ascending=True).head(bottom_n)["symbol"]
     )
-    market_cap_bottom = (
-        tickers.dropna(subset=["market_cap"])
-        .sort_values("market_cap", ascending=True)
-        .head(bottom_n)["symbol"]
-    )
-    pool = set(liquidity_bottom) & set(market_cap_bottom)
-    if pool:
-        logger.info(
-            "Air coin pool size %s (intersection of liquidity & market cap bottom %s)",
-            len(pool),
-            bottom_n,
-        )
-        return pool
-    logger.warning(
-        "Market cap data不足，退化为仅按成交额倒数 %s 选取候选池。", bottom_n
+    logger.info(
+        "按成交额倒数选取候选池，共 %s 个标的（bottom-%s）",
+        len(liquidity_bottom),
+        bottom_n,
     )
     return set(liquidity_bottom)
 
