@@ -192,49 +192,39 @@ echo "────────────────────────�
 echo "  [6/7] 设置定时任务 (crontab)"
 echo "────────────────────────────────────────────────────────────────────────────"
 
-# 生成crontab条目
-CRON_FILE="/tmp/quant4little_cron_$$.txt"
-
-cat > "$CRON_FILE" << EOF
-# Quant4Little 交易机器人 - 自动执行任务
-# 每日UTC 01:00 (北京时间09:00) 更新数据
-0 1 * * * cd $PROJECT_ROOT && bash deploy/cron_update_data.sh >> logs/cron_update.log 2>&1
-
-# 每日UTC 02:00 (北京时间10:00) 生成交易信号
-0 2 * * * cd $PROJECT_ROOT && bash deploy/cron_generate_signals.sh >> logs/cron_signals.log 2>&1
-
-# 每日UTC 02:30 (北京时间10:30) 执行交易
-30 2 * * * cd $PROJECT_ROOT && bash deploy/cron_execute_trades.sh >> logs/cron_trades.log 2>&1
-EOF
-
-echo "  生成的定时任务:"
 echo ""
-cat "$CRON_FILE"
+echo "  ⚠️  注意: 定时任务配置已迁移到独立脚本"
+echo ""
+echo "  旧版日度交易系统已弃用，请使用新的小时级交易系统："
+echo ""
+echo "  1️⃣  清理旧定时任务："
+echo "      bash deploy/clear_crontab.sh"
+echo ""
+echo "  2️⃣  安装小时级定时任务："
+echo "      bash deploy/setup_cron_hourly.sh"
+echo ""
+echo "  3️⃣  查看详细文档："
+echo "      cat CRON_SETUP.md"
+echo ""
+echo "  系统特性："
+echo "    - 每天09:00筛选候选池（100个币）"
+echo "    - 每小时检测KDJ信号并立即执行交易"
+echo "    - 并行下单 + 5次重试 + 市价兜底"
+echo "    - 最大持仓10个品种"
 echo ""
 
-read -p "  是否安装定时任务到crontab? (y/n) " -n 1 -r
+read -p "  是否现在安装小时级定时任务? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    # 备份现有crontab
-    crontab -l > /tmp/crontab_backup_$$.txt 2>/dev/null || true
-
-    # 删除旧的Quant4Little任务（如果存在）
-    (crontab -l 2>/dev/null | grep -v "Quant4Little" || true) | crontab -
-
-    # 添加新任务
-    (crontab -l 2>/dev/null; cat "$CRON_FILE") | crontab -
-
-    echo "  ✓ 定时任务已安装"
     echo ""
-    echo "  可以使用以下命令查看:"
-    echo "    crontab -l"
+    echo "  正在安装小时级定时任务..."
+    bash deploy/setup_cron_hourly.sh
 else
+    echo ""
     echo "  ℹ️  跳过定时任务安装"
-    echo "  您可以手动执行交易脚本:"
-    echo "    bash deploy/cron_execute_trades.sh"
+    echo "  您可以稍后手动安装:"
+    echo "    bash deploy/setup_cron_hourly.sh"
 fi
-
-rm -f "$CRON_FILE"
 
 echo ""
 
