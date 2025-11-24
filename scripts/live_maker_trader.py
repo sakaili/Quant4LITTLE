@@ -18,6 +18,7 @@ if sys.platform == 'win32':
 from pathlib import Path
 import time
 from datetime import datetime, date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,7 +54,7 @@ class LiveMakerTrader:
         maker_offset_pct: float = 0.10,
         max_wait_seconds: int = 60,
         max_positions: int = 10,  # 最多同时10个仓位
-        max_retry_attempts: int = 3,  # 最大追单次数
+        max_retry_attempts: int = 5,  # 最大追单次数（增加到5次）
         retry_offset_steps: list = None  # 追单偏移量列表
     ):
         self.position_pct = position_pct
@@ -62,8 +63,8 @@ class LiveMakerTrader:
         self.max_positions = max_positions
         self.use_testnet = use_testnet
         self.max_retry_attempts = max_retry_attempts
-        # 默认追单偏移策略: [0.05%, 0.01%, 0%市价]
-        self.retry_offset_steps = retry_offset_steps if retry_offset_steps is not None else [0.05, 0.01, 0.0]
+        # 默认追单偏移策略: [0.08%, 0.05%, 0.03%, 0.01%, 0%市价]
+        self.retry_offset_steps = retry_offset_steps if retry_offset_steps is not None else [0.08, 0.05, 0.03, 0.01, 0.0]
 
         # 获取代理
         https_proxy = os.getenv('HTTPS_PROXY')
@@ -247,6 +248,50 @@ class LiveMakerTrader:
             print(f"  ❌ 下单失败: {e}")
             return None
 
+    def place_market_entry(
+        self,
+        symbol: str,
+        amount: float
+    ) -> dict | None:
+        """
+        市价单做空入场（兜底方案）
+
+        Args:
+            symbol: 交易对
+            amount: 数量
+
+        Returns:
+            订单信息 or None
+        """
+        # 确保数量为正数
+        amount = abs(amount)
+
+        if amount <= 0:
+            print(f"  ❌ 开仓数量无效: {amount}")
+            return None
+
+        try:
+            print(f"  💥 市价单做空入场: {symbol}")
+            print(f"    数量: {amount:.4f}")
+            print(f"    类型: MARKET (市价单)")
+
+            order = self.exchange.create_market_order(
+                symbol=symbol,
+                side='sell',
+                amount=amount,
+                params={
+                    'positionSide': 'SHORT'  # 指定为做空方向（双向持仓模式）
+                }
+            )
+
+            print(f"  ✅ 市价单已下达! ID: {order['id']}")
+            print(f"    成交价: {order.get('average', 0):.4f}")
+            return order
+
+        except Exception as e:
+            print(f"  ❌ 市价单失败: {e}")
+            return None
+
     def set_tp_sl_orders(
         self,
         symbol: str,
@@ -356,8 +401,19 @@ class LiveMakerTrader:
 
                 # 检查是否还能追单
                 if attempt_num > self.max_retry_attempts:
-                    print(f"  ❌ 已达到最大追单次数 ({self.max_retry_attempts})，放弃")
-                    return False, None
+                    print(f"  ❌ 已达到最大追单次数 ({self.max_retry_attempts})，使用市价单兜底")
+
+                    # 使用市价单兜底
+                    print(f"\n  💥 最终方案：市价单")
+                    market_order = self.place_market_entry(symbol=symbol, amount=amount)
+
+                    if not market_order:
+                        print(f"  ❌ 市价单也失败，放弃")
+                        return False, None
+
+                    # 市价单通常立即成交，直接返回
+                    print(f"  ✅ 市价单成交!")
+                    return True, market_order
 
                 # 开始追单
                 print(f"\n  🔄 追单 (第{attempt_num}/{self.max_retry_attempts}次)")
@@ -410,6 +466,108 @@ class LiveMakerTrader:
             except Exception as e:
                 print(f"\n  ⚠️  查询失败: {e}")
                 time.sleep(2)
+
+    def process_single_signal(
+        self,
+        signal: dict,
+        signal_index: int,
+        total_signals: int,
+        available_balance: float,
+        leverage: int
+    ) -> tuple[bool, str]:
+        """
+        处理单个信号（并行执行）
+
+        返回:
+            (success: bool, message: str)
+        """
+        # 转换交易对名称
+        raw_symbol = signal['symbol']
+        if '_USDT_USDT_' in raw_symbol:
+            symbol = raw_symbol.split('_USDT_USDT_')[0] + 'USDT'
+        elif raw_symbol.endswith('_1d') or raw_symbol.endswith('_1h'):
+            symbol = raw_symbol.rsplit('_', 1)[0]
+        else:
+            symbol = raw_symbol
+
+        print(f"\n{'─'*70}")
+        print(f"  信号 {signal_index+1}/{total_signals}")
+        print(f"{'─'*70}")
+
+        try:
+            # 获取实时价格
+            orderbook = self.get_orderbook(symbol)
+            if not orderbook:
+                msg = f"  ❌ 无法获取{symbol}实时价格，跳过"
+                print(msg)
+                return False, msg
+
+            current_price = orderbook['ask']
+
+            # 计算开仓数量
+            amount = self.calculate_position_size(
+                symbol=symbol,
+                current_price=current_price,
+                account_equity=available_balance,
+                leverage=leverage
+            )
+
+            position_value = amount * current_price
+
+            print(f"  标的: {raw_symbol}")
+            print(f"  交易对: {symbol}")
+            print(f"  信号价: {signal['close']:.4f} (历史)")
+            print(f"  实时价: {current_price:.4f} (当前)")
+            print(f"  开仓数量: {amount:.4f}")
+            print(f"  开仓金额: {position_value:.2f} USDT")
+            print(f"  杠杆: {leverage}x")
+            print(f"  模型分类: Class {signal.get('model_class', 'N/A')}")
+
+            # 下单
+            order = self.place_short_entry(symbol=symbol, amount=amount)
+            if not order:
+                msg = f"  ❌ {symbol} 下单失败"
+                print(msg)
+                return False, msg
+
+            # 等待成交
+            is_filled, filled_order = self.wait_for_fill(
+                symbol=symbol,
+                order_id=order['id'],
+                amount=amount
+            )
+
+            if not is_filled:
+                msg = f"  ❌ {symbol} 订单未成交"
+                print(msg)
+                return False, msg
+
+            print(f"  ✅ {symbol} 做空入场成功!")
+
+            # 获取成交价格
+            entry_price = filled_order.get('average', current_price)
+
+            # 设置止盈止损
+            tp_order, sl_order = self.set_tp_sl_orders(
+                symbol=symbol,
+                amount=amount,
+                entry_price=entry_price,
+                take_profit_pct=30.0,
+                stop_loss_pct=200.0
+            )
+
+            if tp_order and sl_order:
+                print(f"  ✅ {symbol} 止盈止损已自动设置!")
+            else:
+                print(f"  ⚠️  {symbol} 止盈止损设置失败，请手动设置!")
+
+            msg = f"  ✅ {symbol} 交易完成"
+            return True, msg
+
+        except Exception as e:
+            msg = f"  ❌ {symbol} 处理异常: {e}"
+            print(msg)
+            return False, msg
 
 
 def load_today_signals() -> pd.DataFrame:
@@ -530,99 +688,45 @@ def main():
 
     # 执行交易
     print(f"\n{'='*70}")
-    print(f"  🚀 开始执行交易")
+    print(f"  🚀 开始执行交易 (并行模式)")
     print(f"{'='*70}\n")
 
     success_count = 0
     failed_count = 0
 
-    for i, (idx, signal) in enumerate(signals.head(signals_to_execute).iterrows()):
-        print(f"\n{'─'*70}")
-        print(f"  信号 {i+1}/{signals_to_execute}")
-        print(f"{'─'*70}")
+    # 并行执行所有订单
+    signals_to_process = signals.head(signals_to_execute)
 
-        # 转换交易对名称: DEXE_USDT_USDT_1d -> DEXEUSDT
-        raw_symbol = signal['symbol']
-        if '_USDT_USDT_' in raw_symbol:
-            # 格式: XXX_USDT_USDT_1d -> XXXUSDT
-            symbol = raw_symbol.split('_USDT_USDT_')[0] + 'USDT'
-        elif raw_symbol.endswith('_1d') or raw_symbol.endswith('_1h'):
-            # 格式: XXXUSDT_1d -> XXXUSDT
-            symbol = raw_symbol.rsplit('_', 1)[0]
-        else:
-            symbol = raw_symbol
-
-        # 获取实时价格（从订单簿）
-        orderbook = trader.get_orderbook(symbol)
-        if not orderbook:
-            print(f"  ❌ 无法获取{symbol}实时价格，跳过")
-            failed_count += 1
-            continue
-
-        # 使用实时价格计算开仓数量
-        current_price = orderbook['ask']  # 使用卖一价
-
-        # 计算开仓数量 (使用可用余额 × 杠杆 × 实时价格)
-        amount = trader.calculate_position_size(
-            symbol=symbol,
-            current_price=current_price,
-            account_equity=available_balance,  # 使用可用余额
-            leverage=leverage
-        )
-
-        position_value = amount * current_price
-
-        print(f"  标的: {raw_symbol}")
-        print(f"  交易对: {symbol}")
-        print(f"  信号价: {signal['close']:.4f} (历史)")
-        print(f"  实时价: {current_price:.4f} (当前)")
-        print(f"  开仓数量: {amount:.4f}")
-        print(f"  开仓金额: {position_value:.2f} USDT")
-        print(f"  杠杆: {leverage}x")
-        print(f"  模型分类: Class {signal.get('model_class', 'N/A')}")
-
-        # 下单
-        order = trader.place_short_entry(symbol=symbol, amount=amount)
-
-        if not order:
-            print(f"  ❌ 下单失败，跳过")
-            failed_count += 1
-            continue
-
-        # 等待成交
-        is_filled, filled_order = trader.wait_for_fill(
-            symbol=symbol,
-            order_id=order['id'],
-            amount=amount
-        )
-
-        if is_filled:
-            success_count += 1
-            print(f"  ✅ 做空入场成功!")
-
-            # 获取成交价格
-            entry_price = filled_order.get('average', current_price)
-
-            # 立即设置止盈止损委托单
-            tp_order, sl_order = trader.set_tp_sl_orders(
-                symbol=symbol,
-                amount=amount,
-                entry_price=entry_price,
-                take_profit_pct=30.0,   # 30%止盈
-                stop_loss_pct=200.0     # 200%止损
+    with ThreadPoolExecutor(max_workers=min(5, signals_to_execute)) as executor:
+        # 提交所有任务
+        futures = {}
+        for i, (idx, signal) in enumerate(signals_to_process.iterrows()):
+            # 将signal转换为字典
+            signal_dict = signal.to_dict()
+            future = executor.submit(
+                trader.process_single_signal,
+                signal_dict,
+                i,
+                signals_to_execute,
+                available_balance,
+                leverage
             )
+            futures[future] = signal_dict['symbol']
 
-            if tp_order and sl_order:
-                print(f"  ✅ 止盈止损已自动设置!")
-            else:
-                print(f"  ⚠️  止盈止损设置失败，请手动设置!")
+        # 等待所有任务完成
+        print(f"  📤 已提交 {len(futures)} 个订单任务，等待并行执行...\n")
 
-        else:
-            failed_count += 1
-            print(f"  ❌ 订单未成交")
-
-        # 避免频繁请求
-        time.sleep(1)
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                success, msg = future.result()
+                if success:
+                    success_count += 1
+                else:
+                    failed_count += 1
+            except Exception as e:
+                print(f"  ❌ {symbol} 任务异常: {e}")
+                failed_count += 1
 
     # 汇总
     print(f"\n{'='*70}")
