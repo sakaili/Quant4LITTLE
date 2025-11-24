@@ -14,7 +14,11 @@
       "Bash(timeout 600 python:*)",
       "Bash(timeout 300 python:*)",
       "Bash(chmod +x f:/2025/Quant4Little/deploy/*.sh)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git rm:*)"
     ],
     "deny": [],
     "ask": []

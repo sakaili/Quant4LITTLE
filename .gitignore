@@ -16,6 +16,11 @@ venv/
 logs/
 *.log
 
+# Training artifacts
+training_curves.png
+*.png
+*.jpg
+
 # Data artifacts (regenerated or large)
 data/daily_klines/
 data/hourly_klines/
