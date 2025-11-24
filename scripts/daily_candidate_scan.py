@@ -4,7 +4,7 @@ Module 2: Daily scanner that identifies the weakest Binance USDT perpetuals.
 
 筛选步骤（必须按顺序执行）：
 1. 过滤主流币：直接剔除 BTC/ETH/BNB/SOL/XRP 等大市值资产。
-2. 流动性过滤：按24小时成交额倒数排序，选取底部300个标的作为"空气币池"。
+2. 流动性过滤：按24小时成交额倒数排序，选取底部100个标的作为"空气币池"。
 3. 入场信号：候选池中，最新日线满足 EMA10 < EMA20 < EMA30 的标的。
 4. 风险控制：资金费率不低于 -1%，且 ATR14 没有在最近 3 天暴涨
    （今天 ATR > 3 * 前 3 天均值）。
@@ -60,7 +60,7 @@ MAJOR_BASES = {
 FUNDING_RATE_FLOOR = -0.01  # -1%
 ATR_SPIKE_LOOKBACK = 3
 ATR_SPIKE_MULTIPLIER = 3.0
-BOTTOM_N = 300
+BOTTOM_N = 100
 OUTPUT_DIR = Path("data/daily_scans")
 
 

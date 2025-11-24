@@ -22,7 +22,7 @@ CRON_FILE="/tmp/quant4little_cron_hourly_$$.txt"
 cat > "$CRON_FILE" << CRONEOF
 # Quant4Little 小时级交易系统
 # 每天09:00 (UTC 01:00) - 筛选候选币池
-0 1 * * * cd $PROJECT_ROOT && python3 scripts/daily_candidate_scan.py --bottom-n 300 >> logs/cron_candidates.log 2>&1
+0 1 * * * cd $PROJECT_ROOT && python3 scripts/daily_candidate_scan.py --bottom-n 100 >> logs/cron_candidates.log 2>&1
 
 # 每小时整点 - 检测信号并执行交易
 0 * * * * cd $PROJECT_ROOT && bash deploy/cron_hourly_detect.sh >> logs/cron_hourly.log 2>&1
