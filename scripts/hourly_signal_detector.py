@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.indicator_utils import compute_kdj
 from scripts.modeling.features import build_tabular_vector, build_hourly_sequence
+from scripts.data_fetcher import BinanceDataFetcher
 
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -62,7 +63,8 @@ def detect_signals(
     use_model: bool = False,
     model_dir: Optional[Path] = None,
     top_k: int = 10,
-    detect_date: date = None
+    detect_date: date = None,
+    auto_fetch: bool = True
 ) -> pd.DataFrame:
     """检测候选池中的入场信号"""
     if not candidates_file.exists():
@@ -71,6 +73,42 @@ def detect_signals(
 
     candidates = pd.read_csv(candidates_file)
     print(f"  候选池大小: {len(candidates)}")
+
+    # 自动抓取缺失的数据
+    if auto_fetch:
+        fetcher = BinanceDataFetcher()
+        missing_symbols = []
+
+        for _, row in candidates.iterrows():
+            symbol = row["symbol"]
+            hourly_file = hourly_dir / f"{symbol}_1h.csv"
+            if not hourly_file.exists():
+                missing_symbols.append(symbol)
+
+        if missing_symbols:
+            print(f"  检测到{len(missing_symbols)}个标的缺少小时线数据，开始自动下载...")
+            hourly_dir.mkdir(parents=True, exist_ok=True)
+
+            from datetime import timedelta, timezone
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=30)  # 下载最近30天数据
+
+            for i, symbol in enumerate(missing_symbols):
+                try:
+                    print(f"    [{i+1}/{len(missing_symbols)}] 下载 {symbol} 小时线数据...", end="")
+                    df = fetcher.fetch_klines(symbol, start=start, end=end, timeframe="1h")
+                    if not df.empty:
+                        hourly_file = hourly_dir / f"{symbol}_1h.csv"
+                        df.to_csv(hourly_file, index=False)
+                        print(f" ✓ ({len(df)}根K线)")
+                    else:
+                        print(f" ✗ (无数据)")
+                except Exception as e:
+                    print(f" ✗ (错误: {e})")
+                    continue
+
+            print(f"  数据下载完成\n")
+
     print(f"  开始检测信号...\n")
 
     signals = []
