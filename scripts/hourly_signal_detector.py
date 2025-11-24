@@ -89,12 +89,11 @@ def detect_signals(
             df_hourly = add_indicators(df_hourly)
             latest = df_hourly.iloc[-1]
 
-            # 信号条件: KDJ强超买(>70) + EMA底部形态 + ATR波动
+            # 信号条件: KDJ强超买(>70) + EMA底部形态
             kdj_ok = latest["kdj_j"] > 70  # KDJ > 70，强超买做空信号
             ema_ok = latest["ema10"] < latest["ema20"] < latest["ema30"]
-            atr_ok = latest["atr_pct"] >= 2.0
 
-            if kdj_ok and ema_ok and atr_ok:
+            if kdj_ok and ema_ok:
                 signal_data = {
                     "symbol": symbol,
                     "close": latest["close"],
