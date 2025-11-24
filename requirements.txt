@@ -1,0 +1,20 @@
+# Quant4Little 项目依赖
+# Python >= 3.9
+
+# 核心交易和数据依赖
+ccxt>=4.0.0           # 交易所API接口
+pandas>=2.0.0         # 数据处理
+numpy>=1.24.0         # 数值计算
+pandas-ta>=0.3.14b    # 技术指标计算（KDJ, EMA, ATR等）
+
+# 深度学习框架
+torch>=2.0.0          # PyTorch (CPU版本)
+
+# 数据科学和可视化
+matplotlib>=3.7.0     # 绘图（用于回测）
+scikit-learn>=1.3.0   # 数据预处理和归一化
+
+# 工具库
+python-dotenv>=0.19.0 # 环境变量加载
+tqdm>=4.65.0          # 进度条
+python-dateutil>=2.8.0 # 日期时间处理
