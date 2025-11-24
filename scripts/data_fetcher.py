@@ -26,6 +26,13 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import os
 
+# Load .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required, will use system env vars
+
 import ccxt  # type: ignore
 import pandas as pd
 import pandas_ta as ta
