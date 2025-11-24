@@ -71,8 +71,18 @@ def detect_signals(
 
     candidates = pd.read_csv(candidates_file)
     print(f"  候选池大小: {len(candidates)}")
+    print(f"  开始检测信号...\n")
 
     signals = []
+    stats = {
+        "total": len(candidates),
+        "no_hourly_file": 0,
+        "insufficient_data": 0,
+        "kdj_fail": 0,
+        "ema_fail": 0,
+        "pass": 0,
+        "error": 0
+    }
 
     for idx, row in candidates.iterrows():
         symbol = row["symbol"]
@@ -80,10 +90,12 @@ def detect_signals(
         try:
             hourly_file = hourly_dir / f"{symbol}_1h.csv"
             if not hourly_file.exists():
+                stats["no_hourly_file"] += 1
                 continue
 
             df_hourly = pd.read_csv(hourly_file)
             if len(df_hourly) < 50:
+                stats["insufficient_data"] += 1
                 continue
 
             df_hourly = add_indicators(df_hourly)
@@ -93,6 +105,20 @@ def detect_signals(
             kdj_ok = latest["kdj_j"] > 70  # KDJ > 70，强超买做空信号
             ema_ok = latest["ema10"] < latest["ema20"] < latest["ema30"]
 
+            # 详细诊断输出（前20个标的）
+            if idx < 20 or (kdj_ok and ema_ok):
+                kdj_status = "✓" if kdj_ok else "✗"
+                ema_status = "✓" if ema_ok else "✗"
+                print(f"  [{idx+1:3d}] {symbol:20s} | KDJ={latest['kdj_j']:6.2f} {kdj_status} | EMA排列 {ema_status}")
+
+            if not kdj_ok:
+                stats["kdj_fail"] += 1
+                continue
+            if not ema_ok:
+                stats["ema_fail"] += 1
+                continue
+
+            stats["pass"] += 1
             if kdj_ok and ema_ok:
                 signal_data = {
                     "symbol": symbol,
@@ -112,10 +138,22 @@ def detect_signals(
                     signal_data["_daily_file"] = daily_dir / f"{symbol}_1d.csv"
 
                 signals.append(signal_data)
-                print(f"  发现信号: {symbol} (KDJ={latest['kdj_j']:.1f})")
+                print(f"  ✓ 发现信号: {symbol} (KDJ={latest['kdj_j']:.1f})")
 
         except Exception as e:
+            stats["error"] += 1
             continue
+
+    # 打印统计摘要
+    print(f"\n  ========== 检测统计 ==========")
+    print(f"  总候选标的:     {stats['total']:3d}")
+    print(f"  缺少小时数据:   {stats['no_hourly_file']:3d}")
+    print(f"  数据不足(<50): {stats['insufficient_data']:3d}")
+    print(f"  KDJ未达标(<70): {stats['kdj_fail']:3d}")
+    print(f"  EMA排列不符:    {stats['ema_fail']:3d}")
+    print(f"  通过筛选:       {stats['pass']:3d}")
+    print(f"  处理错误:       {stats['error']:3d}")
+    print(f"  ==============================\n")
 
     if len(signals) == 0:
         return pd.DataFrame()
