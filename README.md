@@ -140,7 +140,7 @@ python scripts/backtester.py \
 #### 2. 生成候选池
 
 ```bash
-python scripts/daily_candidate_scan.py --top-n 100
+python scripts/daily_candidate_scan.py --bottom-n 100
 ```
 
 生成文件: `data/daily_scans/candidates_YYYYMMDD.csv`
@@ -758,7 +758,7 @@ print(f"Top-10平均期望值: {signals.head(10)['expected_value'].mean():.4f}")
 1. 检查网络连接和代理配置
 2. 检查API密钥是否有效
 3. 查看错误日志: `tail -50 logs/cron_candidates.log`
-4. 手动重试: `python3 scripts/daily_candidate_scan.py --top-n 100`
+4. 手动重试: `python3 scripts/daily_candidate_scan.py --bottom-n 100`
 
 **Q: 历史数据在哪里?**
 

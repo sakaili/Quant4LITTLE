@@ -61,7 +61,7 @@ MAJOR_BASES = {
 FUNDING_RATE_FLOOR = -0.01  # -1%
 ATR_SPIKE_LOOKBACK = 3
 ATR_SPIKE_MULTIPLIER = 3.0
-BOTTOM_N = 50
+BOTTOM_N = 100
 OUTPUT_DIR = Path("data/daily_scans")
 
 
@@ -279,7 +279,7 @@ def build_candidates(
 
         # 检查小时级 KDJ（使用截止到 as_of_date 的数据）
         if not latest_kdj_j_above_threshold(
-            fetcher, symbol, threshold=90.0, as_of_date=as_of_date
+            fetcher, symbol, threshold=80.0, as_of_date=as_of_date
         ):
             continue
 
