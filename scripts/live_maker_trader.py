@@ -52,13 +52,18 @@ class LiveMakerTrader:
         position_pct: float = 0.01,  # 每笔1%资金
         maker_offset_pct: float = 0.10,
         max_wait_seconds: int = 60,
-        max_positions: int = 10  # 最多同时10个仓位
+        max_positions: int = 10,  # 最多同时10个仓位
+        max_retry_attempts: int = 3,  # 最大追单次数
+        retry_offset_steps: list = None  # 追单偏移量列表
     ):
         self.position_pct = position_pct
         self.maker_offset_pct = maker_offset_pct
         self.max_wait_seconds = max_wait_seconds
         self.max_positions = max_positions
         self.use_testnet = use_testnet
+        self.max_retry_attempts = max_retry_attempts
+        # 默认追单偏移策略: [0.05%, 0.01%, 0%市价]
+        self.retry_offset_steps = retry_offset_steps if retry_offset_steps is not None else [0.05, 0.01, 0.0]
 
         # 获取代理
         https_proxy = os.getenv('HTTPS_PROXY')
@@ -179,10 +184,16 @@ class LiveMakerTrader:
     def place_short_entry(
         self,
         symbol: str,
-        amount: float
+        amount: float,
+        custom_offset_pct: float = None  # 自定义偏移量（用于追单）
     ) -> dict | None:
         """
         做空入场
+
+        Args:
+            symbol: 交易对
+            amount: 数量
+            custom_offset_pct: 自定义偏移量百分比（None=使用默认maker_offset_pct）
         """
         # 确保数量为正数
         amount = abs(amount)
@@ -195,8 +206,12 @@ class LiveMakerTrader:
         if not orderbook:
             return None
 
+        # 使用自定义偏移量或默认偏移量
+        offset_pct = custom_offset_pct if custom_offset_pct is not None else self.maker_offset_pct
+
         # 计算Maker价格（在ask之上）
-        limit_price = orderbook['ask'] * (1 + self.maker_offset_pct / 100)
+        # 如果offset_pct=0，则等于市价
+        limit_price = orderbook['ask'] * (1 + offset_pct / 100)
 
         # 格式化价格
         try:
@@ -211,7 +226,7 @@ class LiveMakerTrader:
 
         try:
             print(f"  📝 做空入场: {symbol}")
-            print(f"    限价: {limit_price:.4f}")
+            print(f"    限价: {limit_price:.4f} (偏移: {offset_pct}%)")
             print(f"    数量: {amount:.4f}")
             print(f"    盘口: Bid={orderbook['bid']:.4f}, Ask={orderbook['ask']:.4f}")
 
@@ -305,31 +320,87 @@ class LiveMakerTrader:
             print(f"    ❌ 设置止盈止损失败: {e}")
             return None, None
 
-    def wait_for_fill(self, symbol: str, order_id: str) -> tuple[bool, dict | None]:
-        """等待订单成交"""
+    def wait_for_fill(
+        self,
+        symbol: str,
+        order_id: str,
+        amount: float,
+        attempt_num: int = 1
+    ) -> tuple[bool, dict | None]:
+        """
+        等待订单成交，支持超时自动追单
+
+        Args:
+            symbol: 交易对
+            order_id: 订单ID
+            amount: 订单数量
+            attempt_num: 当前尝试次数（1=初次下单）
+
+        Returns:
+            (是否成交, 订单信息)
+        """
         start_time = time.time()
 
         while True:
             elapsed = time.time() - start_time
 
             if elapsed > self.max_wait_seconds:
-                print(f"  ⏰ 超时 ({self.max_wait_seconds}秒)")
+                print(f"\n  ⏰ 超时 ({self.max_wait_seconds}秒)")
+
+                # 取消原订单
                 try:
                     self.exchange.cancel_order(order_id, symbol)
                     print(f"  ❌ 订单已取消")
-                except:
-                    pass
-                return False, None
+                except Exception as e:
+                    print(f"  ⚠️  取消订单失败: {e}")
+
+                # 检查是否还能追单
+                if attempt_num > self.max_retry_attempts:
+                    print(f"  ❌ 已达到最大追单次数 ({self.max_retry_attempts})，放弃")
+                    return False, None
+
+                # 开始追单
+                print(f"\n  🔄 追单 (第{attempt_num}/{self.max_retry_attempts}次)")
+
+                # 计算新的偏移量
+                retry_idx = attempt_num - 1
+                if retry_idx < len(self.retry_offset_steps):
+                    new_offset = self.retry_offset_steps[retry_idx]
+                else:
+                    new_offset = 0.0  # 超出列表范围，使用市价
+
+                print(f"    调整偏移: {new_offset}%")
+
+                # 重新下单
+                new_order = self.place_short_entry(
+                    symbol=symbol,
+                    amount=amount,
+                    custom_offset_pct=new_offset
+                )
+
+                if not new_order:
+                    print(f"  ❌ 追单失败，放弃")
+                    return False, None
+
+                # 递归调用，等待新订单成交
+                return self.wait_for_fill(
+                    symbol=symbol,
+                    order_id=new_order['id'],
+                    amount=amount,
+                    attempt_num=attempt_num + 1
+                )
 
             try:
                 order = self.exchange.fetch_order(order_id, symbol)
                 status = order['status']
 
                 if status == 'closed':
-                    print(f"  ✅ 成交! 价格: {order.get('average', 0):.4f}")
+                    print(f"\n  ✅ 成交! 价格: {order.get('average', 0):.4f}")
+                    if attempt_num > 1:
+                        print(f"    (第{attempt_num}次尝试成功)")
                     return True, order
                 elif status == 'canceled':
-                    print(f"  ❌ 已取消")
+                    print(f"\n  ❌ 已取消")
                     return False, None
                 elif status == 'open':
                     filled_pct = (order.get('filled', 0) / order.get('amount', 1)) * 100
@@ -337,7 +408,7 @@ class LiveMakerTrader:
                     time.sleep(2)
 
             except Exception as e:
-                print(f"  ⚠️  查询失败: {e}")
+                print(f"\n  ⚠️  查询失败: {e}")
                 time.sleep(2)
 
 
@@ -521,7 +592,8 @@ def main():
         # 等待成交
         is_filled, filled_order = trader.wait_for_fill(
             symbol=symbol,
-            order_id=order['id']
+            order_id=order['id'],
+            amount=amount
         )
 
         if is_filled:
