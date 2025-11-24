@@ -570,20 +570,37 @@ class LiveMakerTrader:
             return False, msg
 
 
-def load_today_signals() -> pd.DataFrame:
-    """加载今日Paper Trading信号"""
-    signals_dir = ROOT / "data" / "paper_trading"
-    today = date.today().strftime('%Y%m%d')
-    today_file = signals_dir / f"signals_{today}.csv"
+def load_today_signals(signals_file: str = None) -> pd.DataFrame:
+    """
+    加载交易信号
 
-    if today_file.exists():
-        signals = pd.read_csv(today_file)
-        print(f"  ✅ 加载今日信号: {len(signals)} 个")
-        return signals
+    参数:
+        signals_file: 自定义信号文件路径。如果为None,使用默认paper_trading路径
+    """
+    if signals_file:
+        # 使用自定义信号文件（如小时级信号）
+        signals_path = Path(signals_file)
+        if signals_path.exists():
+            signals = pd.read_csv(signals_path)
+            print(f"  ✅ 加载信号文件: {signals_path.name} ({len(signals)} 个)")
+            return signals
+        else:
+            print(f"  ❌ 信号文件不存在: {signals_path}")
+            return pd.DataFrame()
     else:
-        print(f"  ⚠️  未找到今日信号文件: {today_file}")
-        print(f"  提示: 请先运行 python scripts/hourly_trading_enhanced.py 生成信号")
-        return pd.DataFrame()
+        # 使用默认paper trading信号
+        signals_dir = ROOT / "data" / "paper_trading"
+        today = date.today().strftime('%Y%m%d')
+        today_file = signals_dir / f"signals_{today}.csv"
+
+        if today_file.exists():
+            signals = pd.read_csv(today_file)
+            print(f"  ✅ 加载今日信号: {len(signals)} 个")
+            return signals
+        else:
+            print(f"  ⚠️  未找到今日信号文件: {today_file}")
+            print(f"  提示: 请先运行信号生成脚本")
+            return pd.DataFrame()
 
 
 def main():
@@ -592,6 +609,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="实盘Maker交易执行")
     parser.add_argument("--auto-confirm", action="store_true", help="自动确认，跳过yes输入")
+    parser.add_argument("--signals-file", type=str, help="指定信号文件路径(支持小时级信号)")
     args = parser.parse_args()
 
     print(f"\n{'█'*70}")
@@ -655,7 +673,7 @@ def main():
     print(f"  📊 加载交易信号")
     print(f"{'─'*70}")
 
-    signals = load_today_signals()
+    signals = load_today_signals(signals_file=args.signals_file)
     if len(signals) == 0:
         print(f"  ❌ 无可用信号")
         return
