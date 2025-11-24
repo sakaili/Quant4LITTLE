@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -279,7 +278,7 @@ def build_candidates(
         funding = fetch_funding_rate(fetcher, symbol)
         if funding is not None and funding < FUNDING_RATE_FLOOR:
             logger.debug("%s rejected: funding %.4f", symbol, funding)
-            time.sleep(funding_cooldown)
+            # time.sleep(funding_cooldown)  # 已禁用：提升数据抓取速度
             continue
 
         last = history.iloc[-1]
@@ -303,7 +302,7 @@ def build_candidates(
                 latest_close=float(last["close"]),
             )
         )
-        time.sleep(funding_cooldown)
+        # time.sleep(funding_cooldown)  # 已禁用：提升数据抓取速度
     return rows
 
 

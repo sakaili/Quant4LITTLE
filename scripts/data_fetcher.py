@@ -19,7 +19,6 @@ modules can re-use a single network client.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -106,8 +105,7 @@ class BinanceDataFetcher:
                     }
                 }
             exchange_config = {
-                "enableRateLimit": True,
-                "rateLimit": 1000,  # 每个请求间隔1秒
+                "enableRateLimit": False,  # 禁用速率限制，提升数据抓取速度
                 "apiKey": api_key,
                 "secret": api_secret,
                 "options": {
@@ -269,7 +267,7 @@ class BinanceDataFetcher:
             cursor = last_open + step_ms
             if len(batch) < limit:
                 break
-            time.sleep(self.request_cooldown)
+            # time.sleep(self.request_cooldown)  # 已禁用：提升数据抓取速度
 
         if not all_rows:
             raise RuntimeError(f"No kline data returned for {symbol}")

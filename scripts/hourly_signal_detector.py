@@ -108,10 +108,10 @@ def detect_signals(
                         print(f" ✓ ({len(df)}根K线)")
                     else:
                         print(f" ✗ (无数据)")
-                    time.sleep(1)  # API限流控制
+                    # time.sleep(1)  # 已禁用：提升数据抓取速度
                 except Exception as e:
                     print(f" ✗ (错误: {e})")
-                    time.sleep(1)
+                    # time.sleep(1)  # 已禁用：提升数据抓取速度
                     continue
 
             print(f"  数据下载完成\n")
