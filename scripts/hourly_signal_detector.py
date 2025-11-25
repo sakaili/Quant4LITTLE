@@ -147,20 +147,40 @@ def detect_signals(
             df_hourly = add_indicators(df_hourly)
             latest = df_hourly.iloc[-1]
 
-            # 信号条件: 仅检查KDJ强超买(>70)
-            kdj_ok = latest["kdj_j"] > 70  # KDJ > 70，强超买做空信号
+            # 使用模型模式：跳过KDJ筛选，让模型评估所有标的
+            if use_model:
+                # 模型模式：收集所有标的数据
+                signal_data = {
+                    "symbol": symbol,
+                    "close": latest["close"],
+                    "kdj_j": latest["kdj_j"],
+                    "ema10": latest["ema10"],
+                    "ema20": latest["ema20"],
+                    "ema30": latest["ema30"],
+                    "atr_pct": latest["atr_pct"],
+                    "signal_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "signal_type": "MODEL"
+                }
+                signal_data["_hourly_df"] = df_hourly
+                signal_data["_daily_file"] = daily_dir / f"{clean_symbol}_1d.csv"
+                signals.append(signal_data)
 
-            # 详细诊断输出（前20个标的）
-            if idx < 20 or kdj_ok:
-                kdj_status = "✓" if kdj_ok else "✗"
-                print(f"  [{idx+1:3d}] {symbol:20s} | KDJ={latest['kdj_j']:6.2f} {kdj_status}")
+                if idx < 20:
+                    print(f"  [{idx+1:3d}] {symbol:20s} | KDJ={latest['kdj_j']:6.2f} (待模型评分)")
+                stats["pass"] += 1
+            else:
+                # 非模型模式：使用KDJ>70筛选
+                kdj_ok = latest["kdj_j"] > 70
 
-            if not kdj_ok:
-                stats["kdj_fail"] += 1
-                continue
+                if idx < 20 or kdj_ok:
+                    kdj_status = "✓" if kdj_ok else "✗"
+                    print(f"  [{idx+1:3d}] {symbol:20s} | KDJ={latest['kdj_j']:6.2f} {kdj_status}")
 
-            stats["pass"] += 1
-            if kdj_ok:
+                if not kdj_ok:
+                    stats["kdj_fail"] += 1
+                    continue
+
+                stats["pass"] += 1
                 signal_data = {
                     "symbol": symbol,
                     "close": latest["close"],
@@ -172,12 +192,6 @@ def detect_signals(
                     "signal_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "signal_type": "HOURLY"
                 }
-
-                # 准备模型特征（如果需要）
-                if use_model and daily_dir:
-                    signal_data["_hourly_df"] = df_hourly  # 临时保存用于模型推理
-                    signal_data["_daily_file"] = daily_dir / f"{symbol}_1d.csv"
-
                 signals.append(signal_data)
                 print(f"  ✓ 发现信号: {symbol} (KDJ={latest['kdj_j']:.1f})")
 
@@ -190,12 +204,14 @@ def detect_signals(
     print(f"  总候选标的:     {stats['total']:3d}")
     print(f"  缺少小时数据:   {stats['no_hourly_file']:3d}")
     print(f"  数据不足(<50): {stats['insufficient_data']:3d}")
-    print(f"  KDJ未达标(<70): {stats['kdj_fail']:3d}")
+    if not use_model:
+        print(f"  KDJ未达标(<70): {stats['kdj_fail']:3d}")
     print(f"  通过筛选:       {stats['pass']:3d}")
     print(f"  处理错误:       {stats['error']:3d}")
     print(f"  ==============================\n")
 
     if len(signals) == 0:
+        print(f"\n  无可用标的进行评估")
         return pd.DataFrame()
 
     df_signals = pd.DataFrame(signals)
@@ -346,7 +362,7 @@ def main():
     parser.add_argument("--candidates-dir", type=Path, default=Path("data/daily_scans"))
     parser.add_argument("--hourly-dir", type=Path, default=Path("data/hourly_klines"))
     parser.add_argument("--daily-dir", type=Path, default=Path("data/daily_klines"), help="日线数据目录（模型需要）")
-    parser.add_argument("--output-dir", type=Path, default=Path("data/hourly_signals"))
+    parser.add_argument("--output-dir", type=Path, default=Path("data/signals"), help="信号输出目录")
     parser.add_argument("--model-dir", type=Path, default=Path("models"), help="模型目录")
     parser.add_argument("--use-model", action="store_true", help="使用Transformer模型排序")
     parser.add_argument("--top-k", type=int, default=10, help="保留Top-K个信号（默认10）")
