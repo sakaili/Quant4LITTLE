@@ -251,6 +251,40 @@ def rank_with_model(
     """使用Transformer模型对信号进行排序"""
     try:
         from scripts.lightweight_ranker import LightweightRanker
+        from scripts.data_fetcher import BinanceDataFetcher
+        from datetime import timedelta, timezone
+
+        # 检查并下载缺失的日线数据
+        missing_symbols = []
+        for idx, row in signals.iterrows():
+            daily_file = row["_daily_file"]
+            if not daily_file.exists():
+                missing_symbols.append(row["symbol"])
+
+        if missing_symbols:
+            print(f"  检测到{len(missing_symbols)}个标的缺少日线数据，开始自动下载...")
+            fetcher = BinanceDataFetcher()
+            daily_dir.mkdir(parents=True, exist_ok=True)
+
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=365)  # 下载1年日线数据
+
+            for i, symbol in enumerate(missing_symbols):
+                try:
+                    print(f"    [{i+1}/{len(missing_symbols)}] 下载 {symbol} 日线数据...", end="")
+                    df = fetcher.fetch_klines(symbol, start=start, end=end, timeframe="1d")
+                    if not df.empty:
+                        daily_filename = symbol.replace("/", "_").replace(":", "_") + "_1d.csv"
+                        daily_file = daily_dir / daily_filename
+                        df.to_csv(daily_file, index=False)
+                        print(f" ✓ ({len(df)}根K线)")
+                    else:
+                        print(f" ✗ (无数据)")
+                except Exception as e:
+                    print(f" ✗ (错误: {e})")
+                    continue
+
+            print(f"  日线数据下载完成\n")
 
         # 加载模型
         ranker = LightweightRanker(model_dir)
