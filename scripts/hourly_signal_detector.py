@@ -162,7 +162,9 @@ def detect_signals(
                     "signal_type": "MODEL"
                 }
                 signal_data["_hourly_df"] = df_hourly
-                signal_data["_daily_file"] = daily_dir / f"{clean_symbol}_1d.csv"
+                # 日线文件名格式：SYMBOL_USDT_USDT_1d.csv (保留下划线)
+                daily_filename = symbol.replace("/", "_").replace(":", "_") + "_1d.csv"
+                signal_data["_daily_file"] = daily_dir / daily_filename
                 signals.append(signal_data)
 
                 if idx < 20:
