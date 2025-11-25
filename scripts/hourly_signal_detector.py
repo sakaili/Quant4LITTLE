@@ -124,7 +124,6 @@ def detect_signals(
         "no_hourly_file": 0,
         "insufficient_data": 0,
         "kdj_fail": 0,
-        "ema_fail": 0,
         "pass": 0,
         "error": 0
     }
@@ -148,25 +147,20 @@ def detect_signals(
             df_hourly = add_indicators(df_hourly)
             latest = df_hourly.iloc[-1]
 
-            # 信号条件: KDJ强超买(>70) + EMA底部形态
+            # 信号条件: 仅检查KDJ强超买(>70)
             kdj_ok = latest["kdj_j"] > 70  # KDJ > 70，强超买做空信号
-            ema_ok = latest["ema10"] < latest["ema20"] < latest["ema30"]
 
             # 详细诊断输出（前20个标的）
-            if idx < 20 or (kdj_ok and ema_ok):
+            if idx < 20 or kdj_ok:
                 kdj_status = "✓" if kdj_ok else "✗"
-                ema_status = "✓" if ema_ok else "✗"
-                print(f"  [{idx+1:3d}] {symbol:20s} | KDJ={latest['kdj_j']:6.2f} {kdj_status} | EMA排列 {ema_status}")
+                print(f"  [{idx+1:3d}] {symbol:20s} | KDJ={latest['kdj_j']:6.2f} {kdj_status}")
 
             if not kdj_ok:
                 stats["kdj_fail"] += 1
                 continue
-            if not ema_ok:
-                stats["ema_fail"] += 1
-                continue
 
             stats["pass"] += 1
-            if kdj_ok and ema_ok:
+            if kdj_ok:
                 signal_data = {
                     "symbol": symbol,
                     "close": latest["close"],
@@ -197,7 +191,6 @@ def detect_signals(
     print(f"  缺少小时数据:   {stats['no_hourly_file']:3d}")
     print(f"  数据不足(<50): {stats['insufficient_data']:3d}")
     print(f"  KDJ未达标(<70): {stats['kdj_fail']:3d}")
-    print(f"  EMA排列不符:    {stats['ema_fail']:3d}")
     print(f"  通过筛选:       {stats['pass']:3d}")
     print(f"  处理错误:       {stats['error']:3d}")
     print(f"  ==============================\n")
